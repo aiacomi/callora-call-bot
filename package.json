@@ -1,0 +1,22 @@
+{
+  "name": "awf-call-bot",
+  "version": "1.0.0",
+  "description": "Callora AI call bot backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.15.1",
+    "body-parser": "^2.2.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.20.0",
+    "twilio": "^6.0.0"
+  }
+}
