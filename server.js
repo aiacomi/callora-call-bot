@@ -243,13 +243,6 @@ app.post("/voice", (req, res) => {
   res.send(twiml.toString());
 });
 
-  gather.play(audioUrl(brand, "confirmare-comanda.mp3"));
-  twiml.play(audioUrl(brand, "fara-raspuns.mp3"));
-  twiml.hangup();
-
-  res.type("text/xml");
-  res.send(twiml.toString());
-
 
 app.post("/handle-response", async (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
