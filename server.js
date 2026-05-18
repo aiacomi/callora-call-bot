@@ -89,6 +89,40 @@ app.get("/orders", async (req, res) => {
   }
 });
 
+app.get("/orders/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM orders
+      WHERE order_id = $1
+      LIMIT 1
+      `,
+      [orderId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: `Comanda cu orderId "${orderId}" nu a fost găsită.`,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      order: result.rows[0],
+    });
+  } catch (error) {
+    console.error("GET ORDER BY ID ERROR:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
 app.post("/new-order", async (req, res) => {
   try {
     const {
