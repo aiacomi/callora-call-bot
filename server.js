@@ -228,12 +228,91 @@ app.post("/status", (req, res) => {
   res.sendStatus(200);
 });
 
+async function processQueuedOrders() {
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM orders
+      WHERE status = 'queued'
+        AND call_after <= NOW()
+      ORDER BY call_after ASC
+      LIMIT 10;
+      `
+    );
+
+    for (const order of result.rows) {
+      try {
+        console.log("PROCESSING ORDER:", order.order_id, order.client_phone, order.brand);
+
+        if (!brandExists(order.brand)) {
+          console.error(`Brand-ul "${order.brand}" nu există pentru comanda ${order.order_id}`);
+          await pool.query(
+            `
+            UPDATE orders
+            SET status = 'failed',
+                call_status = 'brand_missing',
+                updated_at = NOW()
+            WHERE id = $1
+            `,
+            [order.id]
+          );
+          continue;
+        }
+
+        const call = await client.calls.create({
+          to: order.client_phone,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          url: `${process.env.BASE_URL}/voice?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
+          method: "POST",
+          statusCallback: `${process.env.BASE_URL}/status?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
+          statusCallbackMethod: "POST"
+        });
+
+        await pool.query(
+          `
+          UPDATE orders
+          SET status = 'calling',
+              call_status = 'started',
+              called_at = NOW(),
+              twilio_call_sid = $2,
+              updated_at = NOW()
+          WHERE id = $1
+          `,
+          [order.id, call.sid]
+        );
+
+        console.log("CALL STARTED FOR ORDER:", order.order_id, call.sid);
+      } catch (error) {
+        console.error("PROCESS ORDER ERROR:", order.order_id, error.message);
+
+        await pool.query(
+          `
+          UPDATE orders
+          SET status = 'failed',
+              call_status = 'call_error',
+              updated_at = NOW()
+          WHERE id = $1
+          `,
+          [order.id]
+        );
+      }
+    }
+  } catch (error) {
+    console.error("QUEUE WORKER ERROR:", error.message);
+  }
+}
+
 async function startServer() {
   try {
     await initDb();
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
+
+    setInterval(processQueuedOrders, 30000);
+    console.log("Queue worker started: checking queued orders every 30 seconds");
   } catch (error) {
     console.error("Failed to start server:", error.message);
     process.exit(1);
