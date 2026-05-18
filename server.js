@@ -50,6 +50,11 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS orders_order_id_unique
+    ON orders (order_id);
+  `);
+
   console.log("Database ready: orders table is available");
 }
 
@@ -59,6 +64,29 @@ function audioUrl(brand, fileName) {
 
 app.get("/", (req, res) => {
   res.send("AWF call bot is running");
+});
+
+app.get("/orders", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM orders
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+
+    return res.json({
+      ok: true,
+      count: result.rows.length,
+      orders: result.rows,
+    });
+  } catch (error) {
+    console.error("GET ORDERS ERROR:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
 });
 
 app.post("/new-order", async (req, res) => {
@@ -75,6 +103,19 @@ app.post("/new-order", async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: 'Lipsesc câmpuri obligatorii: "orderId" și/sau "phone"',
+      });
+    }
+
+    const existing = await pool.query(
+      `SELECT * FROM orders WHERE order_id = $1 LIMIT 1`,
+      [orderId]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: `Comanda cu orderId "${orderId}" există deja.`,
+        order: existing.rows[0],
       });
     }
 
@@ -98,6 +139,13 @@ app.post("/new-order", async (req, res) => {
       [orderId, storeName || null, clientName || null, phone, brand, callAfter]
     );
 
+    console.log("NEW ORDER SAVED:", {
+      orderId,
+      phone,
+      brand,
+      callAfter,
+    });
+
     return res.json({
       ok: true,
       message: "Comanda a fost salvată și programată pentru apel.",
@@ -105,6 +153,23 @@ app.post("/new-order", async (req, res) => {
     });
   } catch (error) {
     console.error("NEW ORDER ERROR:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
+app.post("/reset-orders", async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM orders;`);
+
+    return res.json({
+      ok: true,
+      message: "Toate comenzile de test au fost șterse.",
+    });
+  } catch (error) {
+    console.error("RESET ORDERS ERROR:", error.message);
     return res.status(500).json({
       ok: false,
       error: error.message,
