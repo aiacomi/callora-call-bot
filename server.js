@@ -31,6 +31,20 @@ function brandExists(brand) {
   return fs.existsSync(brandPath);
 }
 
+const cors = require("cors");
+app.use(
+  cors({
+    origin: [
+      "https://callora-order-simulator.vercel.app",
+      "https://callora-site.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:5174"
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
