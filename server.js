@@ -5,10 +5,17 @@ const bodyParser = require("body-parser");
 const twilio = require("twilio");
 const path = require("path");
 const fs = require("fs");
+const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DEFAULT_BRAND = process.env.DEFAULT_BRAND || "demo";
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -22,6 +29,28 @@ const client = twilio(
 function brandExists(brand) {
   const brandPath = path.join(__dirname, "public", "audio", brand);
   return fs.existsSync(brandPath);
+}
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      store_name TEXT,
+      client_name TEXT,
+      client_phone TEXT NOT NULL,
+      brand TEXT NOT NULL DEFAULT 'demo',
+      status TEXT NOT NULL DEFAULT 'queued',
+      call_status TEXT NOT NULL DEFAULT 'pending',
+      call_after TIMESTAMP NOT NULL,
+      called_at TIMESTAMP NULL,
+      twilio_call_sid TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  console.log("Database ready: orders table is available");
 }
 
 function audioUrl(brand, fileName) {
@@ -148,6 +177,16 @@ app.post("/status", (req, res) => {
   res.sendStatus(200);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+async function startServer() {
+  try {
+    await initDb();
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Failed to start server:", error.message);
+    process.exit(1);
+  }
+}
+
+startServer();
