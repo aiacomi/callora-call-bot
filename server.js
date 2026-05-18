@@ -222,6 +222,7 @@ app.post("/call", async (req, res) => {
 
 app.post("/voice", (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
+  const orderId = req.query.orderId || "";
   const twiml = new twilio.twiml.VoiceResponse();
 
   const gather = twiml.gather({
@@ -229,7 +230,7 @@ app.post("/voice", (req, res) => {
     numDigits: 1,
     timeout: 6,
     speechTimeout: "auto",
-    action: `/handle-response?brand=${encodeURIComponent(brand)}`,
+    action: `/handle-response?brand=${encodeURIComponent(brand)}&orderId=${encodeURIComponent(orderId)}`,
     method: "POST",
     language: "ro-RO"
   });
@@ -242,30 +243,56 @@ app.post("/voice", (req, res) => {
   res.send(twiml.toString());
 });
 
-app.post("/handle-response", (req, res) => {
+  gather.play(audioUrl(brand, "confirmare-comanda.mp3"));
+  twiml.play(audioUrl(brand, "fara-raspuns.mp3"));
+  twiml.hangup();
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+app.post("/handle-response", async (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
+  const orderId = req.query.orderId || null;
   const digits = req.body.Digits || "";
   const speech = (req.body.SpeechResult || "").toLowerCase().trim();
 
   let result = "unknown";
 
- if (
-  digits === "1" ||
-  speech.includes("confirm comanda") ||
-  speech === "confirm" ||
-  speech.includes("confirm")
-) {
-  result = "confirmed";
-} else if (
-  digits === "2" ||
-  speech.includes("anulez comanda") ||
-  speech === "anulez" ||
-  speech.includes("anulez")
-) {
-  result = "cancelled";
-}
+  if (
+    digits === "1" ||
+    speech.includes("confirm comanda") ||
+    speech === "confirm" ||
+    speech.includes("confirm")
+  ) {
+    result = "confirmed";
+  } else if (
+    digits === "2" ||
+    speech.includes("anulez comanda") ||
+    speech === "anulez" ||
+    speech.includes("anulez")
+  ) {
+    result = "cancelled";
+  }
 
-  console.log("RASPUNS CLIENT:", { brand, digits, speech, result });
+  console.log("CLIENT RESPONSE:", { brand, orderId, digits, speech, result });
+
+  try {
+    if (orderId) {
+      await pool.query(
+        `
+        UPDATE orders
+        SET status = $2,
+            call_status = $2,
+            updated_at = NOW()
+        WHERE order_id = $1
+        `,
+        [orderId, result]
+      );
+    }
+  } catch (error) {
+    console.error("HANDLE RESPONSE DB ERROR:", error.message);
+  }
 
   const twiml = new twilio.twiml.VoiceResponse();
 
@@ -283,13 +310,34 @@ app.post("/handle-response", (req, res) => {
   res.send(twiml.toString());
 });
 
-app.post("/status", (req, res) => {
+app.post("/status", async (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
+  const orderId = req.query.orderId || null;
+
   console.log("CALL STATUS:", {
     brand,
+    orderId,
     callStatus: req.body.CallStatus,
     callSid: req.body.CallSid
   });
+
+  try {
+    if (orderId) {
+      await pool.query(
+        `
+        UPDATE orders
+        SET call_status = $2,
+            twilio_call_sid = COALESCE($3, twilio_call_sid),
+            updated_at = NOW()
+        WHERE order_id = $1
+        `,
+        [orderId, req.body.CallStatus || "unknown", req.body.CallSid || null]
+      );
+    }
+  } catch (error) {
+    console.error("STATUS DB ERROR:", error.message);
+  }
+
   res.sendStatus(200);
 });
 
