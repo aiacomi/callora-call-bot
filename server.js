@@ -61,6 +61,57 @@ app.get("/", (req, res) => {
   res.send("AWF call bot is running");
 });
 
+app.post("/new-order", async (req, res) => {
+  try {
+    const {
+      orderId,
+      storeName,
+      clientName,
+      phone,
+      brand = DEFAULT_BRAND,
+    } = req.body;
+
+    if (!orderId || !phone) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Lipsesc câmpuri obligatorii: "orderId" și/sau "phone"',
+      });
+    }
+
+    const callAfter = new Date(Date.now() + 5 * 60 * 1000);
+
+    const result = await pool.query(
+      `
+      INSERT INTO orders (
+        order_id,
+        store_name,
+        client_name,
+        client_phone,
+        brand,
+        status,
+        call_status,
+        call_after
+      )
+      VALUES ($1, $2, $3, $4, $5, 'queued', 'pending', $6)
+      RETURNING *;
+      `,
+      [orderId, storeName || null, clientName || null, phone, brand, callAfter]
+    );
+
+    return res.json({
+      ok: true,
+      message: "Comanda a fost salvată și programată pentru apel.",
+      order: result.rows[0],
+    });
+  } catch (error) {
+    console.error("NEW ORDER ERROR:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
 app.post("/call", async (req, res) => {
   try {
     const to = req.body.to;
