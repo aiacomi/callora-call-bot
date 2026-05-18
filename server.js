@@ -249,7 +249,7 @@ app.post("/voice", (req, res) => {
 
   res.type("text/xml");
   res.send(twiml.toString());
-});
+
 
 app.post("/handle-response", async (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
