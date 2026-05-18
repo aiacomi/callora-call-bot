@@ -6,15 +6,29 @@ const twilio = require("twilio");
 const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
+const cors = require("cors");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DEFAULT_BRAND = process.env.DEFAULT_BRAND || "demo";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false,
   },
+});
+
+app.use(cors());
+
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
 });
 
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -31,19 +45,9 @@ function brandExists(brand) {
   return fs.existsSync(brandPath);
 }
 
-const cors = require("cors");
-app.use(
-  cors({
-    origin: [
-      "https://callora-order-simulator.vercel.app",
-      "https://callora-site.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:5174"
-    ],
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
+function audioUrl(brand, fileName) {
+  return `${process.env.BASE_URL}/audio/${brand}/${fileName}`;
+}
 
 async function initDb() {
   await pool.query(`
@@ -70,10 +74,6 @@ async function initDb() {
   `);
 
   console.log("Database ready: orders table is available");
-}
-
-function audioUrl(brand, fileName) {
-  return `${process.env.BASE_URL}/audio/${brand}/${fileName}`;
 }
 
 app.get("/", (req, res) => {
@@ -229,41 +229,42 @@ app.post("/call", async (req, res) => {
   try {
     const to = req.body.to;
     const brand = req.body.brand || DEFAULT_BRAND;
+    const orderId = req.body.orderId || "";
 
     if (!to) {
       return res.status(400).json({
         ok: false,
-        error: 'Lipsește "to"'
+        error: 'Lipsește "to"',
       });
     }
 
     if (!brandExists(brand)) {
       return res.status(400).json({
         ok: false,
-        error: `Brand-ul "${brand}" nu există în public/audio/${brand}`
+        error: `Brand-ul "${brand}" nu există în public/audio/${brand}`,
       });
     }
 
     const call = await client.calls.create({
       to,
       from: process.env.TWILIO_PHONE_NUMBER,
-      url: `${process.env.BASE_URL}/voice?brand=${encodeURIComponent(brand)}`,
+      url: `${process.env.BASE_URL}/voice?brand=${encodeURIComponent(brand)}&orderId=${encodeURIComponent(orderId)}`,
       method: "POST",
-      statusCallback: `${process.env.BASE_URL}/status?brand=${encodeURIComponent(brand)}`,
-      statusCallbackMethod: "POST"
+      statusCallback: `${process.env.BASE_URL}/status?brand=${encodeURIComponent(brand)}&orderId=${encodeURIComponent(orderId)}`,
+      statusCallbackMethod: "POST",
     });
 
     return res.json({
       ok: true,
       message: "Call started",
       brand,
-      callSid: call.sid
+      callSid: call.sid,
     });
   } catch (error) {
     console.error("CALL ERROR:", error.message);
     return res.status(500).json({
       ok: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -280,7 +281,7 @@ app.post("/voice", (req, res) => {
     speechTimeout: "auto",
     action: `/handle-response?brand=${encodeURIComponent(brand)}&orderId=${encodeURIComponent(orderId)}`,
     method: "POST",
-    language: "ro-RO"
+    language: "ro-RO",
   });
 
   gather.play(audioUrl(brand, "confirmare-comanda.mp3"));
@@ -290,7 +291,6 @@ app.post("/voice", (req, res) => {
   res.type("text/xml");
   res.send(twiml.toString());
 });
-
 
 app.post("/handle-response", async (req, res) => {
   const brand = req.query.brand || DEFAULT_BRAND;
@@ -359,7 +359,7 @@ app.post("/status", async (req, res) => {
     brand,
     orderId,
     callStatus: req.body.CallStatus,
-    callSid: req.body.CallSid
+    callSid: req.body.CallSid,
   });
 
   try {
@@ -420,80 +420,7 @@ async function processQueuedOrders() {
           url: `${process.env.BASE_URL}/voice?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
           method: "POST",
           statusCallback: `${process.env.BASE_URL}/status?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
-          statusCallbackMethod: "POST"
-        });
-
-        await pool.query(
-          `
-          UPDATE orders
-          SET status = 'calling',
-              call_status = 'started',
-              called_at = NOW(),
-              twilio_call_sid = $2,
-              updated_at = NOW()
-          WHERE id = $1
-          `,
-          [order.id, call.sid]
-        );
-
-        console.log("CALL STARTED FOR ORDER:", order.order_id, call.sid);
-      } catch (error) {
-        console.error("PROCESS ORDER ERROR:", order.order_id, error.message);
-
-        await pool.query(
-          `
-          UPDATE orders
-          SET status = 'failed',
-              call_status = 'call_error',
-              updated_at = NOW()
-          WHERE id = $1
-          `,
-          [order.id]
-        );
-      }
-    }
-  } catch (error) {
-    console.error("QUEUE WORKER ERROR:", error.message);
-  }
-}async function processQueuedOrders() {
-  try {
-    const result = await pool.query(
-      `
-      SELECT *
-      FROM orders
-      WHERE status = 'queued'
-        AND call_after <= NOW()
-      ORDER BY call_after ASC
-      LIMIT 10;
-      `
-    );
-
-    for (const order of result.rows) {
-      try {
-        console.log("PROCESSING ORDER:", order.order_id, order.client_phone, order.brand);
-
-        if (!brandExists(order.brand)) {
-          console.error(`Brand-ul "${order.brand}" nu există pentru comanda ${order.order_id}`);
-          await pool.query(
-            `
-            UPDATE orders
-            SET status = 'failed',
-                call_status = 'brand_missing',
-                updated_at = NOW()
-            WHERE id = $1
-            `,
-            [order.id]
-          );
-          continue;
-        }
-
-        const call = await client.calls.create({
-          to: order.client_phone,
-          from: process.env.TWILIO_PHONE_NUMBER,
-          url: `${process.env.BASE_URL}/voice?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
-          method: "POST",
-          statusCallback: `${process.env.BASE_URL}/status?brand=${encodeURIComponent(order.brand)}&orderId=${encodeURIComponent(order.order_id)}`,
-          statusCallbackMethod: "POST"
+          statusCallbackMethod: "POST",
         });
 
         await pool.query(
